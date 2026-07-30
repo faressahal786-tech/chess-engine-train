@@ -28,6 +28,7 @@ repo.object_store.add_object(tree)
 t, msg = int(time.time()), (sys.argv[1] if len(sys.argv) > 1 else 'update').encode()
 commit = Commit()
 commit.tree = tree.id
+commit.parents = [repo.refs[b'refs/heads/master']] if repo.refs[b'refs/heads/master'] else []
 commit.author = commit.committer = b'opencode <opencode@localhost>'
 commit.author_time = commit.commit_time = t
 commit.author_timezone = commit.commit_timezone = 0
