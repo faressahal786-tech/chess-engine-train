@@ -4,9 +4,9 @@ __pycache__/
 brains/*.json
 brains/*.tmp
 chess-trainer/brains/
-chess-trainer-py/brains/
-chess-trainer-py/runtime/
+chess-trainer-py/
 cities-skylines1-agent-skill/
 *.log
 .DS_Store
 Thumbs.db
+*.zip
