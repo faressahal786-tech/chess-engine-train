@@ -155,6 +155,10 @@
   const PASSED_F = [0, 0.2, 0.35, 0.55, 0.8, 1.15, 1.6, 0];
 
   function evaluate(pos, P) {
+    const eIdx = pos.hLo & EVAL_MASK;
+    if (evalGenArr[eIdx] === evalEpoch && evalKeyLo[eIdx] === (pos.hLo | 0) && evalKeyHi[eIdx] === (pos.hHi | 0)) {
+      return evalScoreArr[eIdx];
+    }
     let mg = 0, eg = 0, phase = 0;
     let wBishops = 0, bBishops = 0;
     let wkSq = pos.kings[WHITE], bkSq = pos.kings[BLACK];
@@ -243,7 +247,12 @@
 
     if (phase > 24) phase = 24;
     const score = (mg * phase + eg * (24 - phase)) / 24 + P.tempo;
-    return pos.turn === WHITE ? score : -score;
+    const finalScore = pos.turn === WHITE ? score : -score;
+    evalGenArr[eIdx] = evalEpoch;
+    evalKeyLo[eIdx] = pos.hLo | 0;
+    evalKeyHi[eIdx] = pos.hHi | 0;
+    evalScoreArr[eIdx] = finalScore;
+    return finalScore;
   }
 
   function countShield(b, kSq, color) {
@@ -278,6 +287,13 @@
   let ttEpoch = 1;
   const TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3;
   const MATE_BOUND = MATE - 2000;
+
+  const EVAL_BITS = 14, EVAL_SIZE = 1 << EVAL_BITS, EVAL_MASK = EVAL_SIZE - 1;
+  const evalKeyLo = new Int32Array(EVAL_SIZE);
+  const evalKeyHi = new Int32Array(EVAL_SIZE);
+  const evalScoreArr = new Float64Array(EVAL_SIZE);
+  const evalGenArr = new Int32Array(EVAL_SIZE);
+  let evalEpoch = 1;
 
   function moveScore(m, killers, historyTable, ply, ttMoveCand) {
     if (ttMoveCand && m === ttMoveCand) return TTM_BONUS;
@@ -479,6 +495,7 @@
     if (useTT) {
       if (++ttEpoch > 2000000000) { ttGen.fill(0); ttEpoch = 1; }
     }
+    if (++evalEpoch > 2000000000) { evalGenArr.fill(0); evalEpoch = 1; }
     let prevScored = rootMoves.map((m) => ({ m, s: 0 }));
     for (let d = 1; d <= maxDepth; d++) {
       const scored = [];
@@ -567,10 +584,75 @@
     return pvLine;
   }
 
+  let _parallelWorkers = null;
+  let _parallelWorkerPath = null;
+
+  function ensureParallelWorkers(n, workerPath) {
+    if (_parallelWorkers && _parallelWorkers.length === n && _parallelWorkerPath === workerPath) return _parallelWorkers;
+    if (_parallelWorkers) { for (const w of _parallelWorkers) try { w.terminate(); } catch (e) {} }
+    _parallelWorkers = [];
+    _parallelWorkerPath = workerPath;
+    for (let i = 0; i < n; i++) {
+      try { _parallelWorkers.push(new Worker(workerPath)); } catch (e) { break; }
+    }
+    return _parallelWorkers;
+  }
+
+  function thinkParallel(pos, P, opts, numThreads, workerPath) {
+    opts = opts || {};
+    const maxDepth = opts.maxDepth || 3;
+    const timeMs = opts.timeMs || 0;
+    if (maxDepth <= 3 || numThreads <= 1) return Promise.resolve(think(pos, P, opts));
+    const workers = ensureParallelWorkers(numThreads, workerPath || "js/search-worker.js");
+    if (!workers || !workers.length) return Promise.resolve(think(pos, P, opts));
+    return new Promise((resolve) => {
+      const fen = C.toFen(pos);
+      const plain = paramsToPlain(P);
+      const rootMoves = C.legalMoves(pos);
+      if (!rootMoves.length) { resolve(null); return; }
+      let best = null;
+      let pending = rootMoves.length;
+      let deadline = timeMs ? Date.now() + timeMs : Infinity;
+      const scores = new Map();
+      const start = Date.now();
+      for (let i = 0; i < rootMoves.length; i++) {
+        const mv = rootMoves[i];
+        const w = workers[i % workers.length];
+        const id = i + "_" + Date.now();
+        const subPos = C.setFen(new C.Position(), fen);
+        C.makeMove(subPos, mv);
+        const subFen = C.toFen(subPos);
+        w.postMessage({ cmd: "search", id, fen: subFen, depth: maxDepth - 1, timeMs: Math.max(200, timeMs - (Date.now() - start)), params: plain });
+        w.onmessage = (e) => {
+          const d = e.data || {};
+          if (d.id !== id) return;
+          const v = d.ok ? -d.score : -INF;
+          scores.set(mv, v);
+          if (--pending === 0 || Date.now() > deadline) {
+            let bestMv = rootMoves[0], bestS = -INF;
+            for (const m of rootMoves) {
+              const s = scores.get(m);
+              if (s !== undefined && s > bestS) { bestS = s; bestMv = m; }
+            }
+            const ms = Date.now() - start;
+            resolve({ move: bestMv, score: bestS, depth: maxDepth, nodes: 0, timeMs: ms, pv: [bestMv] });
+          }
+        };
+      }
+      setTimeout(() => {
+        if (pending > 0) {
+          let bestMv = rootMoves[0], bestS = -INF;
+          for (const m of rootMoves) { const s = scores.get(m); if (s !== undefined && s > bestS) { bestS = s; bestMv = m; } }
+          resolve({ move: bestMv || rootMoves[0], score: bestS, depth: maxDepth - 1, nodes: 0, timeMs: Date.now() - start, pv: [bestMv] });
+        }
+      }, timeMs ? timeMs + 100 : 5000);
+    });
+  }
+
   const api = {
     MATE, INF,
     defaultParams, paramsFromPlain, paramsToPlain,
-    evaluate, think
+    evaluate, think, thinkParallel
   };
   root.Engine = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
