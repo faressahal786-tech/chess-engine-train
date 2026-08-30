@@ -393,9 +393,23 @@
 
       let futileBase = -INF;
       let canFutile = false;
-      if (depth === 1 && !inChk && !ttMoveCand && beta < MATE_BOUND) {
-        futileBase = evaluate(pos, P);
-        canFutile = futileBase + 175 <= alpha;
+      let evalForPrune = 0;
+      let hasEval = false;
+      if (!inChk && beta < MATE_BOUND && !ttMoveCand) {
+        if (depth === 1) {
+          futileBase = evaluate(pos, P);
+          hasEval = true; evalForPrune = futileBase;
+          canFutile = futileBase + 175 <= alpha;
+        } else if (depth <= 3) {
+          evalForPrune = evaluate(pos, P);
+          hasEval = true;
+          const margin = depth * 135;
+          if (evalForPrune - margin >= beta) return evalForPrune;
+          if (depth === 2 && evalForPrune + 180 <= alpha) {
+            const q = qsearch(alpha, beta, ply);
+            if (q <= alpha) return q;
+          }
+        }
       }
 
       const moves = sortMoves(C.generateMoves(pos, false), killers, historyTable, Math.min(ply, 60), ttMoveCand);
@@ -409,12 +423,22 @@
         C.makeMove(pos, m);
         if (C.inCheck(pos, us)) { C.unmakeMove(pos); continue; }
         legal++;
+        if (depth <= 2 && !isCap && m !== ttMoveCand) {
+          const h = historyTable[C.mPiece(m) * 128 + C.mTo(m)];
+          if (h < -1200) continue;
+        }
         let v;
         if (i === 0 || depth < 3) {
           v = -negamax(depth - 1, -beta, -alpha, ply + 1, true);
         } else {
           let R = 0;
-          if (i >= 4 && !isCap && !inChk) R = 1;
+          if (i >= 4 && !isCap && !inChk) {
+            R = 1;
+            if (i >= 8 && depth >= 4) R = 2;
+            const h = historyTable[C.mPiece(m) * 128 + C.mTo(m)];
+            if (h < -800) R++;
+            if (h > 800) R = Math.max(0, R - 1);
+          }
           v = -negamax(depth - 1 - R, -alpha - 1, -alpha, ply + 1, true);
           if (R && v > alpha) {
             v = -negamax(depth - 1, -alpha - 1, -alpha, ply + 1, true);
