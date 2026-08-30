@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Self-Play Trainer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♞</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="logo"><span class="logo-glyph">♞</span> Chess Self-Play Trainer <span class="sub">evolution lab</span></div>
+  <div id="brainBadge" class="badge">brain: default · gen 0</div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="play">Play</button>
+    <button class="tab" data-tab="train">Train</button>
+    <button class="tab" data-tab="brain">Brain</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-play" class="tabpage active">
+    <div class="play-layout">
+      <div class="card board-card">
+        <canvas id="board" width="576" height="576"></canvas>
+        <div class="evalrow">
+          <span class="eval-label">engine eval</span>
+          <div class="eval-track"><div id="evalfill"></div><div id="evalmark"></div></div>
+          <span id="evaltext">0.00</span>
+        </div>
+        <div id="engineInfo" class="engine-info">&nbsp;</div>
+      </div>
+
+      <aside class="side-panel">
+        <div class="card status-card">
+          <div class="status-line">
+            <div id="turnDot"></div>
+            <div id="statusText">Your move</div>
+          </div>
+          <div id="banner" class="banner" hidden>
+            <span id="bannerText"></span>
+            <button id="btnRematch" class="btn primary small">Rematch</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>New game</h3>
+          <div class="control-row">
+            <label>Your side
+              <select id="selSide">
+                <option value="white" selected>White</option>
+                <option value="black">Black</option>
+                <option value="random">Random</option>
+              </select>
+            </label>
+            <label>Strength
+              <select id="selStrength">
+                <option value="fast">Fast</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="strong">Strong</option>
+              </select>
+            </label>
+          </div>
+          <button id="btnNewGame" class="btn primary wide">New game</button>
+          <div class="btn-row">
+            <button id="btnUndo" class="btn">↶ Undo</button>
+            <button id="btnFlip" class="btn">⇅ Flip</button>
+            <button id="btnHint" class="btn">💡 Hint</button>
+            <button id="btnSound" class="btn icon" title="toggle sound">🔊</button>
+          </div>
+        </div>
+
+        <div class="card movelist-card">
+          <h3>Moves</h3>
+          <ol id="moveList" class="movelist"></ol>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-train" class="tabpage">
+    <div class="train-layout">
+      <div class="card">
+        <h3>Trainer controls</h3>
+        <p class="hint-text">Each generation the trainer mutates the champion brain into a challenger, they play a match of self-play games, and the challenger takes over only if it scores better than 50%.</p>
+        <div class="control-row wrap">
+          <label>Search depth
+            <select id="selTrainDepth">
+              <option value="1">1 (fastest)</option>
+              <option value="2" selected>2</option>
+              <option value="3">3 (stronger)</option>
+            </select>
+          </label>
+          <label>Games / generation <input id="inpGamesPerGen" type="number" min="2" max="40" value="8"></label>
+          <label>Ply limit <input id="inpMaxPlies" type="number" min="40" max="400" value="140"></label>
+          <label>Random opening plies <input id="inpOpenPlies" type="number" min="0" max="10" value="4"></label>
+          <label>Mutation strength <input id="rngStrength" type="range" min="0.5" max="2" step="0.25" value="1"> <span id="lblStrength">1×</span></label>
+          <label>Threads (0 = all cores) <input id="inpThreads" type="number" min="0" max="64" value="0"></label>
+        </div>
+        <div class="btn-row">
+          <button id="btnTrainStart" class="btn primary">▶ Start training</button>
+          <button id="btnTrainPause" class="btn" disabled>⏸ Pause</button>
+          <button id="btnTrainStop" class="btn danger" disabled>⏹ Stop</button>
+        </div>
+        <p class="hint-text">Tip: for much faster training close this page's games quickly or use the CLI: <code>bun train.js --minutes 30 --threads 0</code>. Brains are saved automatically.</p>
+      </div>
+
+      <div class="card">
+        <h3>Session stats</h3>
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-num" id="stGen">0</span><span class="stat-lbl">generation</span></div>
+          <div class="stat"><span class="stat-num" id="stGames">0</span><span class="stat-lbl">games trained</span></div>
+          <div class="stat"><span class="stat-num" id="stImprove">0</span><span class="stat-lbl">improvements</span></div>
+          <div class="stat"><span class="stat-num" id="stRecord">0/0/0</span><span class="stat-lbl">challenger W/L/D</span></div>
+          <div class="stat"><span class="stat-num" id="stAvgPlies">–</span><span class="stat-lbl">avg plies / game</span></div>
+          <div class="stat"><span class="stat-num" id="stLastMatch">–</span><span class="stat-lbl">last match pts</span></div>
+          <div class="stat"><span class="stat-num" id="stThreads">1</span><span class="stat-lbl">worker threads</span></div>
+        </div>
+      </div>
+
+      <div class="card log-card">
+        <h3>Log</h3>
+        <pre id="trainLog" class="log"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-brain" class="tabpage">
+    <div class="brain-layout">
+      <div class="card">
+        <h3>Current brain</h3>
+        <p id="brainMetaLine" class="meta-line">generation 0 · default parameters</p>
+        <div class="btn-row">
+          <button id="btnExport" class="btn">⬇ Export JSON</button>
+          <button id="btnImport" class="btn">⬆ Import JSON</button>
+          <button id="btnReset" class="btn danger">Reset to defaults</button>
+        </div>
+        <div class="btn-row">
+          <button id="btnSelfTest" class="btn">🧪 Run engine self-test</button>
+        </div>
+        <pre id="selftestOut" class="log small-log" hidden></pre>
+      </div>
+
+      <div class="card">
+        <h3>Piece values (centipawns)</h3>
+        <div id="pvList" class="pv-list"></div>
+        <h3>Positional weights</h3>
+        <div id="scalarList" class="pv-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Piece-square tables <span class="sub">(white view · red likes the square)</span></h3>
+        <div id="heatmaps" class="heatmap-grid"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">everything runs locally in your browser · brains are saved to localStorage · nothing leaves your machine</footer>
+
+<div id="promoModal" class="modal-overlay" hidden>
+  <div class="promo-box">
+    <h3>Promote to…</h3>
+    <div id="promoButtons" class="promo-buttons"></div>
+    <button id="promoCancel" class="btn small">cancel</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+
+<script src="js/chess-core.js"></script>
+<script src="js/search.js"></script>
+<script src="js/trainer-core.js"></script>
+<script src="js/pool.js"></script>
+<script src="js/service.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

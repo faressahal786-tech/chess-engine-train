@@ -1,0 +1,10 @@
+{
+  "name": "chess-selfplay-trainer",
+  "version": "1.0.0",
+  "description": "Chess engine that evolves by playing against itself, with a browser GUI to play against it",
+  "scripts": {
+    "test": "bun run-tests.js",
+    "train": "bun train.js --minutes 5",
+    "serve": "bun serve.js"
+  }
+}

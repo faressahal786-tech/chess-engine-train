@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.pyc
+brains/*.json
+brains/*.tmp
+chess-trainer/brains/
+chess-trainer-py/brains/
+chess-trainer-py/runtime/
+cities-skylines1-agent-skill/
+*.log
+.DS_Store
+Thumbs.db
