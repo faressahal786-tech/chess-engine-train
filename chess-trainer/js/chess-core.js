@@ -120,7 +120,26 @@
       this.hHi = 0;
       this.npm0 = 0;
       this.npm1 = 0;
+      this.pieces = [];
     }
+  }
+
+  function rebuildPieceList(pos) {
+    pos.pieces.length = 0;
+    for (let sq = 0; sq < 128; sq++) {
+      if (sq & 0x88) { sq += 7; continue; }
+      const p = pos.board[sq];
+      if (p) pos.pieces.push({ p, sq });
+    }
+  }
+
+  function removePieceAtSq(pos, sq) {
+    const a = pos.pieces;
+    for (let i = 0; i < a.length; i++) if (a[i].sq === sq) { a[i] = a[a.length - 1]; a.pop(); return; }
+  }
+  function movePieceInList(pos, from, to, newP) {
+    const a = pos.pieces;
+    for (let i = 0; i < a.length; i++) if (a[i].sq === from) { a[i].sq = to; if (newP) a[i].p = newP; return; }
   }
 
   function setFen(pos, fen) {
@@ -156,6 +175,7 @@
     pos.fullmove = parts[5] !== undefined ? +parts[5] : 1;
     computeHash(pos);
     computeNpm(pos);
+    rebuildPieceList(pos);
     return pos;
   }
 
@@ -324,27 +344,33 @@
       hLo: pos.hLo, hHi: pos.hHi, n0: pos.npm0, n1: pos.npm1
     });
     zXor(pos, pc, from);
-    if (cap) zXor(pos, cap, to);
+    if (cap) { zXor(pos, cap, to); removePieceAtSq(pos, to); }
     if (fl & FLAG_EP) {
       const capSq = to + (us === WHITE ? -16 : 16);
       zXor(pos, piece(them, PAWN), capSq);
       pos.board[capSq] = 0;
+      removePieceAtSq(pos, capSq);
     }
     const placed = promoT ? piece(us, promoT) : pc;
     pos.board[to] = placed;
     pos.board[from] = 0;
     zXor(pos, placed, to);
+    movePieceInList(pos, from, to, placed);
     if (fl & FLAG_CASTLE) {
       if (to > from) {
-        zXor(pos, pos.board[to + 1], to + 1);
-        pos.board[to - 1] = pos.board[to + 1];
+        const rp = pos.board[to + 1];
+        zXor(pos, rp, to + 1);
+        pos.board[to - 1] = rp;
         pos.board[to + 1] = 0;
-        zXor(pos, pos.board[to - 1], to - 1);
+        zXor(pos, rp, to - 1);
+        movePieceInList(pos, to + 1, to - 1, rp);
       } else {
-        zXor(pos, pos.board[to - 2], to - 2);
-        pos.board[to + 1] = pos.board[to - 2];
+        const rp = pos.board[to - 2];
+        zXor(pos, rp, to - 2);
+        pos.board[to + 1] = rp;
         pos.board[to - 2] = 0;
-        zXor(pos, pos.board[to + 1], to + 1);
+        zXor(pos, rp, to + 1);
+        movePieceInList(pos, to - 2, to + 1, rp);
       }
     }
     if (typeOf(pc) === KING) pos.kings[us] = to;
@@ -375,14 +401,25 @@
     pos.board[from] = pc;
     pos.board[to] = 0;
     if (fl & FLAG_EP) {
-      pos.board[to + (us === WHITE ? -16 : 16)] = piece(us ^ 1, PAWN);
+      const capSq = to + (us === WHITE ? -16 : 16);
+      pos.board[capSq] = piece(us ^ 1, PAWN);
+      pos.pieces.push({ p: piece(us ^ 1, PAWN), sq: capSq });
     } else if (u.cap) {
       pos.board[to] = u.cap;
+      pos.pieces.push({ p: u.cap, sq: to });
     }
     if (fl & FLAG_CASTLE) {
-      if (to > from) { pos.board[to + 1] = pos.board[to - 1]; pos.board[to - 1] = 0; }
-      else { pos.board[to - 2] = pos.board[to + 1]; pos.board[to + 1] = 0; }
+      if (to > from) {
+        const rp = pos.board[to - 1];
+        pos.board[to + 1] = rp; pos.board[to - 1] = 0;
+        movePieceInList(pos, to - 1, to + 1, rp);
+      } else {
+        const rp = pos.board[to + 1];
+        pos.board[to - 2] = rp; pos.board[to + 1] = 0;
+        movePieceInList(pos, to + 1, to - 2, rp);
+      }
     }
+    movePieceInList(pos, to, from, pc);
     if (typeOf(pc) === KING) pos.kings[us] = from;
     pos.castling = u.castling;
     pos.ep = u.ep;

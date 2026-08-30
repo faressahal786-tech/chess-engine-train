@@ -155,17 +155,15 @@
   const PASSED_F = [0, 0.2, 0.35, 0.55, 0.8, 1.15, 1.6, 0];
 
   function evaluate(pos, P) {
-    const b = pos.board;
     let mg = 0, eg = 0, phase = 0;
     let wBishops = 0, bBishops = 0;
     let wkSq = pos.kings[WHITE], bkSq = pos.kings[BLACK];
     const wpFile = [-1, -1, -1, -1, -1, -1, -1, -1], bpFile = [8, 8, 8, 8, 8, 8, 8, 8];
     const wpCount = [0, 0, 0, 0, 0, 0, 0, 0], bpCount = [0, 0, 0, 0, 0, 0, 0, 0];
+    const pieces = pos.pieces;
 
-    for (let sq = 0; sq < 128; sq++) {
-      if (sq & 0x88) { sq += 7; continue; }
-      const p = b[sq];
-      if (!p) continue;
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i].p, sq = pieces[i].sq;
       const t = p & 7, c = p >> 3;
       const f = sq & 7, r = sq >> 4;
       if (t === PAWN) {
@@ -173,7 +171,6 @@
           mg += P.val.p + P.pstW.p[sq]; eg += P.val.p + P.pstW.p[sq];
           wpCount[f]++;
           if (r > wpFile[f]) wpFile[f] = r;
-          phase += 0;
         } else {
           mg -= P.val.p + P.pstB.p[sq]; eg -= P.val.p + P.pstB.p[sq];
           bpCount[f]++;
@@ -227,10 +224,10 @@
     if (wBishops >= 2) { mg += P.bishopPair; eg += P.bishopPair; }
     if (bBishops >= 2) { mg -= P.bishopPair; eg -= P.bishopPair; }
 
-    for (let sq = 0; sq < 128; sq++) {
-      if (sq & 0x88) { sq += 7; continue; }
-      const p = b[sq];
-      if (!p || (p & 7) !== ROOK) continue;
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i].p;
+      if ((p & 7) !== ROOK) continue;
+      const sq = pieces[i].sq;
       const f = sq & 7;
       if ((p >> 3) === WHITE) {
         if (wpCount[f] === 0) { mg += bpCount[f] === 0 ? P.rookOpen : P.rookHalf; eg += bpCount[f] === 0 ? P.rookOpen : P.rookHalf; }
@@ -239,6 +236,7 @@
       }
     }
 
+    const b = pos.board;
     const wShield = countShield(b, wkSq, WHITE);
     const bShield = countShield(b, bkSq, BLACK);
     mg += wShield * P.kingShield - bShield * P.kingShield;
@@ -369,9 +367,9 @@
       if (depth <= 0) return qsearch(alpha, beta, ply);
 
       const origAlpha = alpha;
-      const ttIdx = depth > 2 ? (pos.hLo & TT_MASK) : 0;
+      const ttIdx = useTT ? (pos.hLo & TT_MASK) : 0;
       let ttMoveCand = 0;
-      if (ply > 0 && depth > 2 && ttGen[ttIdx] === ttEpoch && ttKeyLo[ttIdx] === (pos.hLo | 0) && ttKeyHi[ttIdx] === (pos.hHi | 0)) {
+      if (useTT && ply > 0 && ttGen[ttIdx] === ttEpoch && ttKeyLo[ttIdx] === (pos.hLo | 0) && ttKeyHi[ttIdx] === (pos.hHi | 0)) {
         ttMoveCand = ttMove[ttIdx];
         if (ttDepth[ttIdx] >= depth) {
           let s = ttScore[ttIdx];
@@ -443,7 +441,7 @@
       if (legal === 0) return inChk ? -(MATE - ply) : 0;
 
       let ss = bestVal > MATE_BOUND ? bestVal + ply : bestVal < -MATE_BOUND ? bestVal - ply : bestVal;
-      if (depth > 2) {
+      if (useTT) {
         const flag = bestVal <= origAlpha ? TT_UPPER : (bestVal >= beta ? TT_LOWER : TT_EXACT);
         ttGen[ttIdx] = ttEpoch;
         ttKeyLo[ttIdx] = pos.hLo | 0; ttKeyHi[ttIdx] = pos.hHi | 0;
@@ -453,7 +451,10 @@
       return bestVal;
     }
 
-    if (++ttEpoch > 2000000000) { ttGen.fill(0); ttEpoch = 1; }
+    const useTT = maxDepth > 2;
+    if (useTT) {
+      if (++ttEpoch > 2000000000) { ttGen.fill(0); ttEpoch = 1; }
+    }
     let prevScored = rootMoves.map((m) => ({ m, s: 0 }));
     for (let d = 1; d <= maxDepth; d++) {
       const scored = [];
