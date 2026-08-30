@@ -5,6 +5,7 @@
 
   const MATE = 1000000;
   const INF = 10000000;
+  const PIECE_VAL = [0, 100, 320, 330, 500, 900, 20000];
 
   const PST_P = [
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -268,13 +269,15 @@
   const MVV_LVA_BONUS = 1000000;
   const TTM_BONUS = 2200000;
 
-  const TT_BITS = 19, TT_SIZE = 1 << TT_BITS, TT_MASK = TT_SIZE - 1;
+  const TT_BITS = 20, TT_SIZE = 1 << TT_BITS, TT_MASK = TT_SIZE - 1;
   const ttKeyLo = new Int32Array(TT_SIZE);
   const ttKeyHi = new Int32Array(TT_SIZE);
   const ttMove = new Int32Array(TT_SIZE);
   const ttScore = new Int32Array(TT_SIZE);
   const ttDepth = new Int8Array(TT_SIZE);
   const ttFlag = new Int8Array(TT_SIZE);
+  const ttGen = new Int32Array(TT_SIZE);
+  let ttEpoch = 1;
   const TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3;
   const MATE_BOUND = MATE - 2000;
 
@@ -337,6 +340,12 @@
       const caps = sortMoves(C.generateMoves(pos, true), null, null, 0);
       for (let i = 0; i < caps.length; i++) {
         const m = caps[i];
+        const cap = C.mCapt(m);
+        const promo = C.mPromo(m);
+        if (!promo && cap) {
+          const v = PIECE_VAL[cap & 7];
+          if (stand + v + 150 < alpha) continue;
+        }
         C.makeMove(pos, m);
         if (C.inCheck(pos, pos.turn ^ 1)) { C.unmakeMove(pos); continue; }
         const v = -qsearch(-beta, -alpha, ply + 1);
@@ -360,9 +369,9 @@
       if (depth <= 0) return qsearch(alpha, beta, ply);
 
       const origAlpha = alpha;
-      const ttIdx = pos.hLo & TT_MASK;
+      const ttIdx = depth > 2 ? (pos.hLo & TT_MASK) : 0;
       let ttMoveCand = 0;
-      if (ply > 0 && ttKeyLo[ttIdx] === (pos.hLo | 0) && ttKeyHi[ttIdx] === (pos.hHi | 0)) {
+      if (ply > 0 && depth > 2 && ttGen[ttIdx] === ttEpoch && ttKeyLo[ttIdx] === (pos.hLo | 0) && ttKeyHi[ttIdx] === (pos.hHi | 0)) {
         ttMoveCand = ttMove[ttIdx];
         if (ttDepth[ttIdx] >= depth) {
           let s = ttScore[ttIdx];
@@ -384,21 +393,45 @@
         if (v >= beta) return v >= MATE_BOUND ? beta : v;
       }
 
+      let futileBase = -INF;
+      let canFutile = false;
+      if (depth === 1 && !inChk && !ttMoveCand && beta < MATE_BOUND) {
+        futileBase = evaluate(pos, P);
+        canFutile = futileBase + 175 <= alpha;
+      }
+
       const moves = sortMoves(C.generateMoves(pos, false), killers, historyTable, Math.min(ply, 60), ttMoveCand);
       let legal = 0, bestVal = -INF, bestMv = 0;
       for (let i = 0; i < moves.length; i++) {
         const m = moves[i];
+        const isCap = C.mCapt(m) !== 0 || C.mPromo(m) !== 0 || (C.mFlags(m) & C.FLAG_EP) !== 0;
+        if (canFutile && i >= 3 && !isCap && m !== ttMoveCand) {
+          continue;
+        }
         C.makeMove(pos, m);
         if (C.inCheck(pos, us)) { C.unmakeMove(pos); continue; }
         legal++;
-        const v = -negamax(depth - 1, -beta, -alpha, ply + 1, true);
+        let v;
+        if (i === 0 || depth < 3) {
+          v = -negamax(depth - 1, -beta, -alpha, ply + 1, true);
+        } else {
+          let R = 0;
+          if (i >= 4 && !isCap && !inChk) R = 1;
+          v = -negamax(depth - 1 - R, -alpha - 1, -alpha, ply + 1, true);
+          if (R && v > alpha) {
+            v = -negamax(depth - 1, -alpha - 1, -alpha, ply + 1, true);
+          }
+          if (v > alpha && v < beta) {
+            v = -negamax(depth - 1, -beta, -alpha, ply + 1, true);
+          }
+        }
         C.unmakeMove(pos);
         if (aborted) return bestVal === -INF ? alpha : bestVal;
         if (v > bestVal) { bestVal = v; bestMv = m; }
         if (v > alpha) {
           alpha = v;
           if (v >= beta) {
-            if (!C.mCapt(m) && !C.mPromo(m)) {
+            if (!isCap) {
               const kp = Math.min(ply, 60) * 2;
               if (killers[kp] !== m) { killers[kp + 1] = killers[kp]; killers[kp] = m; }
               historyTable[C.mPiece(m) * 128 + C.mTo(m)] += depth * depth;
@@ -410,14 +443,17 @@
       if (legal === 0) return inChk ? -(MATE - ply) : 0;
 
       let ss = bestVal > MATE_BOUND ? bestVal + ply : bestVal < -MATE_BOUND ? bestVal - ply : bestVal;
-      const flag = bestVal <= origAlpha ? TT_UPPER : (bestVal >= beta ? TT_LOWER : TT_EXACT);
-      ttKeyLo[ttIdx] = pos.hLo | 0; ttKeyHi[ttIdx] = pos.hHi | 0;
-      ttScore[ttIdx] = ss; ttDepth[ttIdx] = depth; ttFlag[ttIdx] = flag; ttMove[ttIdx] = bestMv;
+      if (depth > 2) {
+        const flag = bestVal <= origAlpha ? TT_UPPER : (bestVal >= beta ? TT_LOWER : TT_EXACT);
+        ttGen[ttIdx] = ttEpoch;
+        ttKeyLo[ttIdx] = pos.hLo | 0; ttKeyHi[ttIdx] = pos.hHi | 0;
+        ttScore[ttIdx] = ss; ttDepth[ttIdx] = depth; ttFlag[ttIdx] = flag; ttMove[ttIdx] = bestMv;
+      }
 
       return bestVal;
     }
 
-    ttKeyLo.fill(0); ttKeyHi.fill(0);
+    if (++ttEpoch > 2000000000) { ttGen.fill(0); ttEpoch = 1; }
     let prevScored = rootMoves.map((m) => ({ m, s: 0 }));
     for (let d = 1; d <= maxDepth; d++) {
       const scored = [];
